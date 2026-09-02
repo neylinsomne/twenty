@@ -13,6 +13,7 @@ import { pipeline } from 'stream/promises';
 import { Response } from 'express';
 import { ApiPath, FileFolder } from 'twenty-shared/types';
 
+import { destroyReadableWithSource } from 'src/utils/destroy-readable-with-source.util';
 import { ApplicationRestApiExceptionFilter } from 'src/engine/core-modules/application/application-rest-api-exception.filter';
 import { FrontComponentSharedDependenciesService } from 'src/engine/core-modules/application/front-component-shared-dependencies/front-component-shared-dependencies.service';
 import { extractChecksumFromCacheKey } from 'src/engine/core-modules/application/front-component-shared-dependencies/utils/extract-checksum-from-cache-key.util';
@@ -101,7 +102,7 @@ export class FrontComponentSharedDependenciesController {
     try {
       await pipeline(fileResponse.stream, res);
     } catch (error) {
-      fileResponse.stream.destroy();
+      destroyReadableWithSource(fileResponse.stream);
       this.logger.error(
         'Shared dependencies bundle stream failed mid-transfer',
         { error },

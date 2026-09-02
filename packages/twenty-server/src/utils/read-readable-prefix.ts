@@ -1,5 +1,7 @@
 import { type Readable } from 'stream';
 
+import { destroyReadableWithSource } from 'src/utils/destroy-readable-with-source.util';
+
 export const readReadablePrefix = async (
   stream: Readable,
   maxBytes: number,
@@ -25,7 +27,7 @@ export const readReadablePrefix = async (
         settled = true;
         stream.off('data', onData);
         stream.off('end', onEnd);
-        stream.destroy();
+        destroyReadableWithSource(stream);
         resolve(Buffer.concat(chunks));
       }
     };

@@ -21,6 +21,7 @@ import {
   FileStorageException,
   FileStorageExceptionCode,
 } from 'src/engine/core-modules/file-storage/interfaces/file-storage-exception';
+import { destroyReadableWithSource } from 'src/utils/destroy-readable-with-source.util';
 import { ServerFileStorageService } from 'src/engine/core-modules/file-storage/services/server-file-storage.service';
 import { validateFilePath } from 'src/engine/core-modules/file-storage/utils/validate-file-path.util';
 import {
@@ -100,7 +101,7 @@ export class FileController {
     try {
       await pipeline(fileResponse.stream, res);
     } catch (error) {
-      fileResponse.stream.destroy();
+      destroyReadableWithSource(fileResponse.stream);
       this.logger.error(
         'Application registration file stream failed mid-transfer',
         { error },
@@ -177,7 +178,7 @@ export class FileController {
     try {
       await pipeline(fileResponse.stream, res);
     } catch (error) {
-      fileResponse.stream.destroy();
+      destroyReadableWithSource(fileResponse.stream);
       this.logger.error('Public asset stream failed mid-transfer', { error });
 
       if (!res.headersSent) {
@@ -254,7 +255,7 @@ export class FileController {
     try {
       await pipeline(fileResponse.stream, res);
     } catch (error) {
-      fileResponse.stream.destroy();
+      destroyReadableWithSource(fileResponse.stream);
       this.logger.error('File-by-id stream failed mid-transfer', { error });
 
       if (!res.headersSent) {

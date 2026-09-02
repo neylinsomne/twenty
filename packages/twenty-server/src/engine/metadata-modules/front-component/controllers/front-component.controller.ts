@@ -17,6 +17,7 @@ import {
   FileStorageException,
   FileStorageExceptionCode,
 } from 'src/engine/core-modules/file-storage/interfaces/file-storage-exception';
+import { destroyReadableWithSource } from 'src/utils/destroy-readable-with-source.util';
 import { PRESIGNED_URL_NO_STORE_CACHE_CONTROL } from 'src/engine/core-modules/file/interfaces/file-folder.interface';
 import { setFileResponseHeaders } from 'src/engine/core-modules/file/utils/set-file-response-headers.utils';
 
@@ -100,7 +101,7 @@ export class FrontComponentController {
     try {
       await pipeline(fileResponse.stream, res);
     } catch (error) {
-      fileResponse.stream.destroy();
+      destroyReadableWithSource(fileResponse.stream);
       this.logger.error('Front component stream failed mid-transfer', {
         error,
       });

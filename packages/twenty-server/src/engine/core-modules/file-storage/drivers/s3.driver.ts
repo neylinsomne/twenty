@@ -71,7 +71,17 @@ export class S3Driver implements StorageDriver {
       maxSockets: FILE_STORAGE_S3_MAX_SOCKETS,
     });
 
-    this.s3Client = new S3({ ...s3Options, region, endpoint, requestHandler });
+    // Default checksum validation wraps every GetObject body in a
+    // ChecksumStream that has no _destroy: destroying it strands the
+    // underlying socket in the agent's pool until the pool is exhausted.
+    this.s3Client = new S3({
+      ...s3Options,
+      region,
+      endpoint,
+      requestHandler,
+      requestChecksumCalculation: 'WHEN_REQUIRED',
+      responseChecksumValidation: 'WHEN_REQUIRED',
+    });
     this.bucketName = bucketName;
 
     if (presignEnabled) {
@@ -81,6 +91,8 @@ export class S3Driver implements StorageDriver {
             region,
             endpoint: presignEndpoint,
             requestHandler,
+            requestChecksumCalculation: 'WHEN_REQUIRED',
+            responseChecksumValidation: 'WHEN_REQUIRED',
           })
         : this.s3Client;
     }
