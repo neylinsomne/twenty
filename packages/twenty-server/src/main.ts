@@ -118,7 +118,12 @@ const bootstrap = async () => {
     });
   }
 
-  await app.listen(twentyConfigService.get('NODE_PORT'));
+  // Explicit '0.0.0.0': Node's own listen() default can resolve to
+  // IPv6-any-only on this Alpine base, which an external IPv4 healthcheck
+  // prober (e.g. Railway's) can't reach even though the app is genuinely
+  // up — invisible when testing via `docker exec ... curl localhost`
+  // (same network namespace, works either way).
+  await app.listen(twentyConfigService.get('NODE_PORT'), '0.0.0.0');
 };
 
 void bootstrap();
