@@ -982,8 +982,13 @@ export class AuthService {
       billingCheckoutSessionState,
       locale,
       returnToPath,
-    }: MicrosoftRequest['user'] | GoogleRequest['user'],
-    authProvider: AuthProviderEnum.Google | AuthProviderEnum.Microsoft,
+    }: Partial<MicrosoftRequest['user'] | GoogleRequest['user']> & {
+      email: string;
+    },
+    authProvider:
+      | AuthProviderEnum.Google
+      | AuthProviderEnum.Microsoft
+      | AuthProviderEnum.SSO,
   ): Promise<string> {
     const email = rawEmail.toLowerCase();
 
