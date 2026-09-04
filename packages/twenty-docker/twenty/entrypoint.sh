@@ -9,8 +9,15 @@ setup_and_migrate_db() {
 
     echo "Running database setup and migrations..."
 
-    # Run setup and migration scripts
-    has_schema=$(psql -tAc "SELECT EXISTS (SELECT 1 FROM information_schema.schemata WHERE schema_name = 'core')" ${PG_DATABASE_URL})
+    # Run setup and migration scripts. psql (libpq) doesn't understand the
+    # "no-verify" sslmode value some drivers (e.g. Node's pg) accept — libpq
+    # only knows disable/allow/prefer/require/verify-ca/verify-full, and
+    # "require" already means "encrypt, don't verify the cert chain" there,
+    # so it's the libpq-native equivalent of what PG_DATABASE_URL's
+    # "no-verify" is doing for the app's own driver. Substitute just for
+    # this psql call rather than changing PG_DATABASE_URL itself.
+    PSQL_DATABASE_URL=$(echo "${PG_DATABASE_URL}" | sed 's/sslmode=no-verify/sslmode=require/')
+    has_schema=$(psql -tAc "SELECT EXISTS (SELECT 1 FROM information_schema.schemata WHERE schema_name = 'core')" "${PSQL_DATABASE_URL}")
     if [ "$has_schema" = "f" ]; then
         echo "Database appears to be empty, running migrations."
         yarn database:init:prod
