@@ -1,13 +1,14 @@
 import * as RadixColors from '@radix-ui/colors';
-import { COLOR_DARK } from '@ui/theme/constants/ColorsDark';
 
+// Quiubot brand mustard, lifted/brighter for legibility on a dark surface —
+// see AccentLight.ts for the light-mode version and rationale.
 export const ACCENT_DARK = {
-  primary: COLOR_DARK.blue5,
-  secondary: COLOR_DARK.blue5,
-  tertiary: COLOR_DARK.blue3,
-  quaternary: COLOR_DARK.blue2,
-  accent3570: COLOR_DARK.blue8,
-  accent4060: COLOR_DARK.blue8,
+  primary: '#D9A93F',
+  secondary: '#D9A93F',
+  tertiary: '#4A3B18',
+  quaternary: '#332A12',
+  accent3570: '#C89530',
+  accent4060: '#C89530',
   accent1: RadixColors.indigoDarkP3.indigo1,
   accent2: RadixColors.indigoDarkP3.indigo2,
   accent3: RadixColors.indigoDarkP3.indigo3,

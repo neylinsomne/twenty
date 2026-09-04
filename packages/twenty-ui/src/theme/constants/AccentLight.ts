@@ -1,13 +1,16 @@
 import * as RadixColors from '@radix-ui/colors';
-import { COLOR_LIGHT } from '@ui/theme/constants/ColorsLight';
 
+// Quiubot brand mustard (front_vercel/_ds/design_handoff_quiubot: primary
+// #97731F, hover/shadow #6E5314) in place of Twenty's default blue accent —
+// only the app-level accent tokens are repointed; accent1-12 (Radix indigo,
+// used for finer things like tag chips) are left alone.
 export const ACCENT_LIGHT = {
-  primary: COLOR_LIGHT.blue5,
-  secondary: COLOR_LIGHT.blue5,
-  tertiary: COLOR_LIGHT.blue3,
-  quaternary: COLOR_LIGHT.blue2,
-  accent3570: COLOR_LIGHT.blue8,
-  accent4060: COLOR_LIGHT.blue8,
+  primary: '#97731F',
+  secondary: '#97731F',
+  tertiary: '#E9D6A8',
+  quaternary: '#F6ECD3',
+  accent3570: '#6E5314',
+  accent4060: '#6E5314',
   accent1: RadixColors.indigoP3.indigo1,
   accent2: RadixColors.indigoP3.indigo2,
   accent3: RadixColors.indigoP3.indigo3,
