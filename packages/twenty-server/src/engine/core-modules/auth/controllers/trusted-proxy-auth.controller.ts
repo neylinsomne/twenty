@@ -47,12 +47,28 @@ export class TrustedProxyAuthController {
       );
     }
 
+    // Without a workspaceId, signInUpWithSocialSSO treats every caller as
+    // workspace-agnostic (issues a "pick or create a workspace" token) even
+    // for a user who already belongs to the one shared Quiubot workspace —
+    // that's what left an already-valid member stuck on a "Welcome, X" /
+    // pick-a-workspace screen instead of landing in the CRM. We only ever
+    // run one embedded workspace here, so route straight into it.
+    const workspaceId = process.env.QUIUBOT_DEFAULT_WORKSPACE_ID;
+
+    if (!workspaceId) {
+      throw new AuthException(
+        'QUIUBOT_DEFAULT_WORKSPACE_ID is not configured',
+        AuthExceptionCode.INTERNAL_SERVER_ERROR,
+      );
+    }
+
     return res.redirect(
       await this.authService.signInUpWithSocialSSO(
         {
           email,
           picture: null,
-          action: 'list-available-workspaces',
+          action: 'join-workspace',
+          workspaceId,
         },
         AuthProviderEnum.SSO,
       ),
