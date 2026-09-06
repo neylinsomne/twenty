@@ -20,6 +20,7 @@ import { WorkspaceCacheStorageModule } from 'src/engine/workspace-cache-storage/
 import { WorkspaceCacheModule } from 'src/engine/workspace-cache/workspace-cache.module';
 
 import { ApiKeyController } from './controllers/api-key.controller';
+import { QuiubotMintApiKeyController } from './controllers/quiubot-mint-api-key.controller';
 
 @Module({
   imports: [
@@ -47,7 +48,7 @@ import { ApiKeyController } from './controllers/api-key.controller';
     provideWorkspaceScopedRepository(RoleEntity),
     provideWorkspaceScopedRepository(RoleTargetEntity),
   ],
-  controllers: [ApiKeyController],
+  controllers: [ApiKeyController, QuiubotMintApiKeyController],
   exports: [
     ApiKeyService,
     ApiKeyRoleService,
