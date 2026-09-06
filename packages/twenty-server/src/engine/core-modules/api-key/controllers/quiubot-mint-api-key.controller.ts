@@ -1,8 +1,8 @@
 import {
   Controller,
+  Get,
   InternalServerErrorException,
   NotFoundException,
-  Post,
   Req,
   UnauthorizedException,
   UseGuards,
@@ -32,12 +32,14 @@ const NEVER_EXPIRE_DAYS = 100 * 365;
  * this deployment is production, so it can't be exec'd here. Reuses the
  * exact same ApiKeyService calls, just reachable over HTTP.
  *
- * Gated by a shared secret (QUIUBOT_OPS_SECRET), checked in addition to
- * relying on twenty-server having no public Railway domain — this mints a
- * genuinely sensitive credential, so it gets its own header check rather
- * than piggybacking on the trusted-proxy-auth controller's identity-header
- * trust. Meant to be used a handful of times (initial bootstrap, key
- * rotation), not on every request.
+ * Gated by a shared secret (QUIUBOT_OPS_SECRET) accepted either as a
+ * header or a ?secret= query param — the query param exists purely so this
+ * can be triggered by pasting a URL into an already-authenticated browser
+ * tab (this whole deployment has no shell/SSH access set up), on top of
+ * relying on twenty-server having no public Railway domain. Meant to be
+ * used a handful of times (initial bootstrap, key rotation), not on every
+ * request — rotate QUIUBOT_OPS_SECRET after use if the URL might have been
+ * logged anywhere (browser history, a proxy access log).
  */
 @Controller('quiubot-ops')
 export class QuiubotMintApiKeyController {
@@ -49,12 +51,14 @@ export class QuiubotMintApiKeyController {
     private readonly apiKeyService: ApiKeyService,
   ) {}
 
-  @Post('mint-api-key')
+  @Get('mint-api-key')
   @UseGuards(PublicEndpointGuard, NoPermissionGuard)
   async mintApiKey(@Req() req: Request) {
     const opsSecret = process.env.QUIUBOT_OPS_SECRET;
+    const provided =
+      req.header('x-quiubot-ops-secret') ?? req.query.secret?.toString();
 
-    if (!opsSecret || req.header('x-quiubot-ops-secret') !== opsSecret) {
+    if (!opsSecret || provided !== opsSecret) {
       throw new UnauthorizedException('Invalid or missing ops secret');
     }
 
