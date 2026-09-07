@@ -1,7 +1,9 @@
 import { Controller, Get, Req, Res, UseFilters, UseGuards } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
 
 import { Request, Response } from 'express';
 import { ApiPath } from 'twenty-shared/types';
+import { Repository } from 'typeorm';
 
 import {
   AuthException,
@@ -11,6 +13,7 @@ import { AuthOAuthExceptionFilter } from 'src/engine/core-modules/auth/filters/a
 import { AuthRestApiExceptionFilter } from 'src/engine/core-modules/auth/filters/auth-rest-api-exception.filter';
 import { AuthService } from 'src/engine/core-modules/auth/services/auth.service';
 import { AuthProviderEnum } from 'src/engine/core-modules/workspace/types/workspace.type';
+import { WorkspaceEntity } from 'src/engine/core-modules/workspace/workspace.entity';
 import { NoPermissionGuard } from 'src/engine/guards/no-permission.guard';
 import { PublicEndpointGuard } from 'src/engine/guards/public-endpoint.guard';
 
@@ -32,26 +35,54 @@ import { PublicEndpointGuard } from 'src/engine/guards/public-endpoint.guard';
 @Controller(`${ApiPath.Auth}/trusted-proxy`)
 @UseFilters(AuthRestApiExceptionFilter)
 export class TrustedProxyAuthController {
-  constructor(private readonly authService: AuthService) {}
+  constructor(
+    private readonly authService: AuthService,
+    @InjectRepository(WorkspaceEntity)
+    private readonly workspaceRepository: Repository<WorkspaceEntity>,
+  ) {}
 
   /**
-   * Multi-workspace resolution (control-plane owns the email->tenant->
-   * workspace mapping via portal_users + tenant_registry.
-   * twenty_workspace_id — see control-plane/app/twenty_crm.py): ask it which
-   * workspace this email belongs to. Falls back to
-   * QUIUBOT_DEFAULT_WORKSPACE_ID (the original single-workspace "Salto
-   * Angel" behavior) on any failure/miss — a tenant with no auto-
-   * provisioned workspace of its own, or control-plane being unreachable,
-   * must never break login for the workspace that already works today.
+   * Multi-workspace resolution. Two sources, tried in order:
    *
-   * HARD 3s TIMEOUT on the control-plane call: control-plane's own
-   * production deployment can be down/crash-looping (a real incident this
-   * session — AUTH_MODE=demo forbidden in production, never fixed there
-   * since the REAL control-plane runs locally, not on Railway) without
-   * necessarily refusing the TCP connection fast — an un-timed-out fetch()
-   * could hang the WHOLE login flow far longer than a user will wait,
-   * rendering as a blank/broken iframe instead of degrading to the
-   * fallback below.
+   * 1. control-plane (owns the email->tenant->workspace mapping via
+   *    portal_users + tenant_registry.twenty_workspace_id — see
+   *    control-plane/app/twenty_crm.py). IMPORTANT: control-plane's Railway
+   *    deployment is INTENTIONALLY not the one used in production — the
+   *    real control-plane runs locally on the operator's machine (see
+   *    docs/vigente/seguridad-infraestructura.md + memory deploy-and-idp),
+   *    so RAILWAY_SERVICE_CONTROL_PLANE_URL points at a service kept
+   *    stopped on purpose (AUTH_MODE=demo forbidden in production,
+   *    restartPolicyType=NEVER). This call will therefore ALWAYS fail/
+   *    timeout in production today (hard 3s timeout below so a stopped
+   *    service can't hang the whole login flow) — kept as a fast-path in
+   *    case control-plane ever does become reachable, but never relied on.
+   *
+   * 2. Twenty's OWN membership table, queried directly here: any workspace
+   *    where a WorkspaceUser with this email already exists. This is the
+   *    real fallback in practice, and is why this method exists in this
+   *    controller (not just calling signInUpWithSocialSSO with no
+   *    workspaceId) — that method's own no-workspaceId branch routes
+   *    through a "pick or create a workspace" flow instead
+   *    (auth.service.ts's signInUpWithSocialSSO, "Route SSO sign-ins
+   *    through the same create-or-select flow as credentials instead of
+   *    landing straight on a workspace subdomain"), which would leave an
+   *    EXISTING member stuck on that picker instead of their own CRM. We
+   *    deliberately do NOT reuse AuthSsoService.
+   *    findWorkspaceFromWorkspaceIdOrAuthProvider for this — it additionally
+   *    filters by an isGoogleAuthEnabled/isMicrosoftAuthEnabled/
+   *    isPasswordAuthEnabled column keyed off `authProvider`, which doesn't
+   *    apply to this internal trust boundary (oauth2-proxy/Supabase already
+   *    authenticated the caller) and could wrongly return nothing for a
+   *    workspace that simply never toggled that specific flag.
+   *
+   * Only once BOTH miss do we fall back to QUIUBOT_DEFAULT_WORKSPACE_ID —
+   * the original single-workspace "Salto Angel" behavior — so a genuinely
+   * new email with no membership anywhere still lands somewhere sensible
+   * instead of an error. Confirmed live 2026-09-07: without step 2,
+   * prueba-ingeniousmind@example.com (a real member of the "ingeniousmind"
+   * workspace) was being silently defaulted into Salto Angel's own
+   * subdomain and shown ITS onboarding wizard instead of reaching its own
+   * workspace, because step 1 always fails as explained above.
    */
   private async resolveWorkspaceId(email: string): Promise<string | null> {
     const controlPlaneUrl = process.env.RAILWAY_SERVICE_CONTROL_PLANE_URL;
@@ -72,8 +103,17 @@ export class TrustedProxyAuthController {
           }
         }
       } catch {
-        // fall through to the default workspace below
+        // fall through to the direct membership lookup below
       }
+    }
+
+    const existingMembership = await this.workspaceRepository.findOne({
+      where: { workspaceUsers: { user: { email } } },
+      relations: ['workspaceUsers', 'workspaceUsers.user'],
+    });
+
+    if (existingMembership) {
+      return existingMembership.id;
     }
 
     return process.env.QUIUBOT_DEFAULT_WORKSPACE_ID ?? null;
