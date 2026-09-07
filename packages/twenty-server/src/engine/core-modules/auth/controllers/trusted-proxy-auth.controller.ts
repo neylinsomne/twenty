@@ -43,6 +43,15 @@ export class TrustedProxyAuthController {
    * Angel" behavior) on any failure/miss — a tenant with no auto-
    * provisioned workspace of its own, or control-plane being unreachable,
    * must never break login for the workspace that already works today.
+   *
+   * HARD 3s TIMEOUT on the control-plane call: control-plane's own
+   * production deployment can be down/crash-looping (a real incident this
+   * session — AUTH_MODE=demo forbidden in production, never fixed there
+   * since the REAL control-plane runs locally, not on Railway) without
+   * necessarily refusing the TCP connection fast — an un-timed-out fetch()
+   * could hang the WHOLE login flow far longer than a user will wait,
+   * rendering as a blank/broken iframe instead of degrading to the
+   * fallback below.
    */
   private async resolveWorkspaceId(email: string): Promise<string | null> {
     const controlPlaneUrl = process.env.RAILWAY_SERVICE_CONTROL_PLANE_URL;
@@ -52,7 +61,7 @@ export class TrustedProxyAuthController {
       try {
         const res = await fetch(
           `${controlPlaneUrl}/internal/twenty/workspace-for-email?email=${encodeURIComponent(email)}`,
-          { headers: { 'x-twenty-ops-secret': opsSecret } },
+          { headers: { 'x-twenty-ops-secret': opsSecret }, signal: AbortSignal.timeout(3000) },
         );
 
         if (res.ok) {
