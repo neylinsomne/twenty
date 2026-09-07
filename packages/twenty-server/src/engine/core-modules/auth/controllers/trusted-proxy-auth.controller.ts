@@ -34,6 +34,42 @@ import { PublicEndpointGuard } from 'src/engine/guards/public-endpoint.guard';
 export class TrustedProxyAuthController {
   constructor(private readonly authService: AuthService) {}
 
+  /**
+   * Multi-workspace resolution (control-plane owns the email->tenant->
+   * workspace mapping via portal_users + tenant_registry.
+   * twenty_workspace_id — see control-plane/app/twenty_crm.py): ask it which
+   * workspace this email belongs to. Falls back to
+   * QUIUBOT_DEFAULT_WORKSPACE_ID (the original single-workspace "Salto
+   * Angel" behavior) on any failure/miss — a tenant with no auto-
+   * provisioned workspace of its own, or control-plane being unreachable,
+   * must never break login for the workspace that already works today.
+   */
+  private async resolveWorkspaceId(email: string): Promise<string | null> {
+    const controlPlaneUrl = process.env.RAILWAY_SERVICE_CONTROL_PLANE_URL;
+    const opsSecret = process.env.TWENTY_OPS_SECRET;
+
+    if (controlPlaneUrl && opsSecret) {
+      try {
+        const res = await fetch(
+          `${controlPlaneUrl}/internal/twenty/workspace-for-email?email=${encodeURIComponent(email)}`,
+          { headers: { 'x-twenty-ops-secret': opsSecret } },
+        );
+
+        if (res.ok) {
+          const body = await res.json();
+
+          if (body?.workspace_id) {
+            return body.workspace_id as string;
+          }
+        }
+      } catch {
+        // fall through to the default workspace below
+      }
+    }
+
+    return process.env.QUIUBOT_DEFAULT_WORKSPACE_ID ?? null;
+  }
+
   @Get('redirect')
   @UseGuards(PublicEndpointGuard, NoPermissionGuard)
   @UseFilters(AuthOAuthExceptionFilter)
@@ -49,15 +85,15 @@ export class TrustedProxyAuthController {
 
     // Without a workspaceId, signInUpWithSocialSSO treats every caller as
     // workspace-agnostic (issues a "pick or create a workspace" token) even
-    // for a user who already belongs to the one shared Quiubot workspace —
-    // that's what left an already-valid member stuck on a "Welcome, X" /
-    // pick-a-workspace screen instead of landing in the CRM. We only ever
-    // run one embedded workspace here, so route straight into it.
-    const workspaceId = process.env.QUIUBOT_DEFAULT_WORKSPACE_ID;
+    // for a user who already belongs to a workspace — that's what left an
+    // already-valid member stuck on a "Welcome, X" / pick-a-workspace screen
+    // instead of landing in the CRM. Every caller now has exactly one real
+    // workspace to land in, resolved above.
+    const workspaceId = await this.resolveWorkspaceId(email);
 
     if (!workspaceId) {
       throw new AuthException(
-        'QUIUBOT_DEFAULT_WORKSPACE_ID is not configured',
+        'No workspace could be resolved for this identity',
         AuthExceptionCode.INTERNAL_SERVER_ERROR,
       );
     }
