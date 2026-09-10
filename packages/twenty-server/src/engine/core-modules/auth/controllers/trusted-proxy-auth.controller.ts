@@ -1,7 +1,8 @@
-import { Controller, Get, Req, Res, UseFilters, UseGuards } from '@nestjs/common';
+import { Controller, Get, Query, Res, UseFilters, UseGuards } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 
-import { Request, Response } from 'express';
+import * as jwt from 'jsonwebtoken';
+import { Response } from 'express';
 import { ApiPath } from 'twenty-shared/types';
 import { Repository } from 'typeorm';
 
@@ -16,21 +17,34 @@ import { AuthProviderEnum } from 'src/engine/core-modules/workspace/types/worksp
 import { WorkspaceEntity } from 'src/engine/core-modules/workspace/workspace.entity';
 import { NoPermissionGuard } from 'src/engine/guards/no-permission.guard';
 import { PublicEndpointGuard } from 'src/engine/guards/public-endpoint.guard';
+import { InjectCacheStorage } from 'src/engine/core-modules/cache-storage/decorators/cache-storage.decorator';
+import { CacheStorageService } from 'src/engine/core-modules/cache-storage/services/cache-storage.service';
+import { CacheStorageNamespace } from 'src/engine/core-modules/cache-storage/types/cache-storage-namespace.enum';
 
 /**
- * Quiubot-specific: sign a user into Twenty using the identity oauth2-proxy
- * already verified (X-Forwarded-Email), so a tenant admin who's already
- * authenticated at the portal/oauth2-proxy layer never sees Twenty's own
- * login form. NOT part of upstream Twenty — genuine SSO (SAML/OIDC) is an
- * Enterprise-licensed feature there (see oidc.auth.strategy.ts), so this
- * reuses the same sign-in-or-create + SSO-exchange-token flow Google/
- * Microsoft login already goes through, just triggered by a trusted
- * reverse-proxy header instead of an OAuth callback.
+ * Quiubot-specific: sign a user into Twenty using a short-lived, single-use
+ * code the PORTAL mints for itself (Diache backend's
+ * POST /connectors/crm/handoff-code), so a tenant admin who's already
+ * authenticated at the portal never sees Twenty's own login form. NOT part
+ * of upstream Twenty — genuine SSO (SAML/OIDC) is an Enterprise-licensed
+ * feature there (see oidc.auth.strategy.ts), so this reuses the same
+ * sign-in-or-create + SSO-exchange-token flow Google/Microsoft login already
+ * goes through, just triggered by a signed handoff code instead of an OAuth
+ * callback.
  *
- * SECURITY: this is only safe because twenty-server has no public ingress
- * of its own on Railway — oauth2-proxy (internal network only) is the sole
- * caller, so X-Forwarded-Email cannot be spoofed by an external request.
- * Do not re-attach a public domain to this service without revisiting this.
+ * SECURITY: identity comes from verifying `?code=` (HMAC-SHA256, shared
+ * secret CRM_HANDOFF_JWT_SECRET with the Diache backend, 60s expiry,
+ * single-use enforced via Redis) — NOT from oauth2-proxy's X-Forwarded-Email
+ * header. That header used to be trusted here on the reasoning that
+ * twenty-server has no public ingress of its own (oauth2-proxy, internal
+ * network only, is the sole caller, so the header can't be spoofed
+ * externally) — true, but insufficient: oauth2-proxy's OWN session cookie is
+ * scoped to the whole .vara-alta.lat apex and stays cached per browser
+ * independently of which tenant is currently logged into the portal, so the
+ * header's value could be legitimately-set-by-oauth2-proxy and still be the
+ * WRONG (stale, cross-tenant) identity (confirmed live 2026-09-10). oauth2-
+ * proxy still fronts this whole service as the perimeter gate; it just no
+ * longer decides WHO for this specific decision.
  */
 @Controller(`${ApiPath.Auth}/trusted-proxy`)
 @UseFilters(AuthRestApiExceptionFilter)
@@ -39,7 +53,84 @@ export class TrustedProxyAuthController {
     private readonly authService: AuthService,
     @InjectRepository(WorkspaceEntity)
     private readonly workspaceRepository: Repository<WorkspaceEntity>,
+    @InjectCacheStorage(CacheStorageNamespace.EngineAuthSession)
+    private readonly authSessionCache: CacheStorageService,
   ) {}
+
+  /**
+   * Verifies the short-lived, single-use "CRM handoff code" the portal mints
+   * for itself (Diache backend's POST /connectors/crm/handoff-code) and
+   * passes as ?code=. Returns the verified email, or throws.
+   *
+   * Replaces trusting oauth2-proxy's X-Forwarded-Email header for this
+   * decision (oauth2-proxy stays in front as the perimeter gate — it just no
+   * longer decides WHO). Confirmed live 2026-09-10: that header's identity is
+   * whatever oauth2-proxy's own session cookie (scoped to the whole
+   * .vara-alta.lat apex, cached PER BROWSER) last authenticated — completely
+   * decoupled from which tenant is CURRENTLY logged into the portal in that
+   * browser, so a browser that ever resolved tenant A kept getting tenant A's
+   * workspace forever after, for every other tenant, forever. The code is
+   * signed fresh by the portal's own backend from ITS OWN live Supabase
+   * session on every CRM-tab visit, so it can't go stale the same way.
+   */
+  private async verifyHandoffCode(code: string | undefined): Promise<string> {
+    if (!code) {
+      throw new AuthException(
+        'Missing CRM handoff code',
+        AuthExceptionCode.INVALID_INPUT,
+      );
+    }
+
+    let payload: jwt.JwtPayload;
+
+    try {
+      payload = jwt.verify(code, process.env.CRM_HANDOFF_JWT_SECRET ?? '', {
+        algorithms: ['HS256'],
+      }) as jwt.JwtPayload;
+    } catch {
+      throw new AuthException(
+        'Invalid or expired CRM handoff code',
+        AuthExceptionCode.INVALID_INPUT,
+      );
+    }
+
+    const email = payload.email as string | undefined;
+    const jti = payload.jti as string | undefined;
+
+    if (!email || !jti) {
+      throw new AuthException(
+        'CRM handoff code missing required claims',
+        AuthExceptionCode.INVALID_INPUT,
+      );
+    }
+
+    // Single-use: the FIRST redemption wins, any replay (e.g. someone
+    // capturing this URL and reloading it) is rejected. Fail CLOSED if Redis
+    // itself is unreachable — never silently skip the replay check.
+    let firstUse: boolean;
+
+    try {
+      firstUse = await this.authSessionCache.setIfAbsent(
+        `crm-handoff:${jti}`,
+        true,
+        60_000,
+      );
+    } catch {
+      throw new AuthException(
+        'Could not verify CRM handoff code (cache unavailable)',
+        AuthExceptionCode.INTERNAL_SERVER_ERROR,
+      );
+    }
+
+    if (!firstUse) {
+      throw new AuthException(
+        'CRM handoff code already used',
+        AuthExceptionCode.INVALID_INPUT,
+      );
+    }
+
+    return email;
+  }
 
   /**
    * Multi-workspace resolution. Two sources, tried in order:
@@ -122,15 +213,11 @@ export class TrustedProxyAuthController {
   @Get('redirect')
   @UseGuards(PublicEndpointGuard, NoPermissionGuard)
   @UseFilters(AuthOAuthExceptionFilter)
-  async trustedProxyAuthRedirect(@Req() req: Request, @Res() res: Response) {
-    const email = req.header('x-forwarded-email');
-
-    if (!email) {
-      throw new AuthException(
-        'Missing trusted proxy identity header',
-        AuthExceptionCode.INVALID_INPUT,
-      );
-    }
+  async trustedProxyAuthRedirect(
+    @Query('code') code: string | undefined,
+    @Res() res: Response,
+  ) {
+    const email = await this.verifyHandoffCode(code);
 
     // Without a workspaceId, signInUpWithSocialSSO treats every caller as
     // workspace-agnostic (issues a "pick or create a workspace" token) even
